@@ -121,13 +121,14 @@ type ParserFunc func(v string) (interface{}, error)
 // OnSetFn is a hook that can be run when a value is set.
 type OnSetFn func(tag string, value interface{}, isDefault bool)
 
-// processFieldFn is a function which takes all information about a field and processes it.
+// processFieldFn processes a field and reports whether a nonempty scalar value
+// was resolved. A default retained by SetDefaultsForZeroValuesOnly also counts.
 type processFieldFn func(
 	refField reflect.Value,
 	refTypeField reflect.StructField,
 	opts Options,
 	fieldParams FieldParams,
-) error
+) (bool, error)
 
 // Options for the parser.
 type Options struct {
@@ -329,11 +330,12 @@ func GetFieldParamsWithOptions(v interface{}, opts Options) ([]FieldParams, erro
 	var result []FieldParams
 	err := parseInternal(
 		v,
-		func(_ reflect.Value, _ reflect.StructField, _ Options, fieldParams FieldParams) error {
+		func(_ reflect.Value, _ reflect.StructField, opts Options, fieldParams FieldParams) (bool, error) {
 			if fieldParams.OwnKey != "" {
 				result = append(result, fieldParams)
 			}
-			return nil
+			value, _, _ := getOr(fieldParams.Key, fieldParams.DefaultValue, fieldParams.HasDefaultValue, opts.Environment)
+			return value != "", nil
 		},
 		customOptions(opts),
 	)
@@ -408,7 +410,8 @@ func doParseField(
 	}
 
 	scalarSlice := isScalarSliceBinding(refTypeField, params, opts)
-	if err := processField(refField, refTypeField, opts, params); err != nil {
+	hasValue, err := processField(refField, refTypeField, opts, params)
+	if err != nil {
 		return err
 	}
 
@@ -421,15 +424,16 @@ func doParseField(
 		return doParse(refField, processField, optionsWithEnvPrefix(refTypeField, opts))
 	}
 
-	if isSliceOfStructs(refTypeField) && !scalarSlice {
+	if isSliceOfStructs(refTypeField) && (!scalarSlice || !hasValue) {
 		return doParseSlice(refField, processField, optionsWithEnvPrefix(refTypeField, opts))
 	}
 
 	return nil
 }
 
-// isScalarSliceBinding distinguishes scalar-decoded elements from indexed
-// struct containers. Keep prefix-only and empty inferred bindings as containers.
+// isScalarSliceBinding identifies fields eligible for scalar slice handling.
+// The caller must also check that processing resolved a nonempty scalar value.
+// Keep prefix-only and empty inferred bindings as containers.
 func isScalarSliceBinding(field reflect.StructField, params FieldParams, opts Options) bool {
 	if !isSliceOfStructs(field) {
 		return false
@@ -535,10 +539,15 @@ func doParseSlice(ref reflect.Value, processField processFieldFn, opts Options) 
 	return nil
 }
 
-func setField(refField reflect.Value, refTypeField reflect.StructField, opts Options, fieldParams FieldParams) error {
+func setField(
+	refField reflect.Value,
+	refTypeField reflect.StructField,
+	opts Options,
+	fieldParams FieldParams,
+) (bool, error) {
 	value, isDefault, err := get(fieldParams, opts)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// SetDefaultsForZeroValuesOnly is about defaults: a real env value
@@ -547,10 +556,10 @@ func setField(refField reflect.Value, refTypeField reflect.StructField, opts Opt
 	// silently dropped when the destination already held something
 	// non-zero. See #364.
 	if value != "" && (!isDefault || !opts.SetDefaultsForZeroValuesOnly || refField.IsZero()) {
-		return set(refField, refTypeField, value, opts.FuncMap)
+		return true, set(refField, refTypeField, value, opts.FuncMap)
 	}
 
-	return nil
+	return value != "", nil
 }
 
 const underscore rune = '_'
