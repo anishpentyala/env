@@ -122,7 +122,7 @@ type ParserFunc func(v string) (interface{}, error)
 type OnSetFn func(tag string, value interface{}, isDefault bool)
 
 // processFieldFn processes a field and reports whether a nonempty scalar value
-// was resolved. A default retained by SetDefaultsForZeroValuesOnly also counts.
+// was applied.
 type processFieldFn func(
 	refField reflect.Value,
 	refTypeField reflect.StructField,
@@ -330,12 +330,19 @@ func GetFieldParamsWithOptions(v interface{}, opts Options) ([]FieldParams, erro
 	var result []FieldParams
 	err := parseInternal(
 		v,
-		func(_ reflect.Value, _ reflect.StructField, opts Options, fieldParams FieldParams) (bool, error) {
+		func(refField reflect.Value, _ reflect.StructField, opts Options, fieldParams FieldParams) (bool, error) {
 			if fieldParams.OwnKey != "" {
 				result = append(result, fieldParams)
 			}
-			value, _, _ := getOr(fieldParams.Key, fieldParams.DefaultValue, fieldParams.HasDefaultValue, opts.Environment)
-			return value != "", nil
+			// Metadata must not expand values, read files or invoke callbacks.
+			// Keep indexed keys when those operations could leave no scalar value.
+			if fieldParams.Expand || fieldParams.LoadFile {
+				return false, nil
+			}
+			value, _, isDefault := getOr(
+				fieldParams.Key, fieldParams.DefaultValue, fieldParams.HasDefaultValue, opts.Environment,
+			)
+			return value != "" && (!isDefault || !opts.SetDefaultsForZeroValuesOnly || refField.IsZero()), nil
 		},
 		customOptions(opts),
 	)
@@ -432,7 +439,7 @@ func doParseField(
 }
 
 // isScalarSliceBinding identifies fields eligible for scalar slice handling.
-// The caller must also check that processing resolved a nonempty scalar value.
+// The caller must also check that processing applied a nonempty scalar value.
 // Keep prefix-only and empty inferred bindings as containers.
 func isScalarSliceBinding(field reflect.StructField, params FieldParams, opts Options) bool {
 	if !isSliceOfStructs(field) {
@@ -559,7 +566,7 @@ func setField(
 		return true, set(refField, refTypeField, value, opts.FuncMap)
 	}
 
-	return value != "", nil
+	return false, nil
 }
 
 const underscore rune = '_'
