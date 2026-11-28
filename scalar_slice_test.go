@@ -246,3 +246,77 @@ func TestScalarSliceIndexedContainers(t *testing.T) {
 		})
 	}
 }
+
+func TestScalarSliceWithoutUsableValueKeepsIndexedContainer(t *testing.T) {
+	type urls struct {
+		URLs []url.URL `env:"URLS" envPrefix:"ITEM_"`
+	}
+	type records struct {
+		Values []scalarSliceRecord `env:"VALUES" envPrefix:"ITEM_"`
+	}
+	type emptyDefault struct {
+		Values []scalarSliceRecord `env:"VALUES" envPrefix:"ITEM_" envDefault:""`
+	}
+	type expanded struct {
+		Values []scalarSliceRecord `env:"VALUES,expand" envPrefix:"ITEM_"`
+	}
+	type text struct {
+		Values []scalarSliceText `env:"VALUES" envPrefix:"ITEM_"`
+	}
+	tests := []struct {
+		name   string
+		config any
+		want   any
+		scalar map[string]string
+	}{
+		{
+			"absent-urls", &urls{},
+			&urls{URLs: []url.URL{{Scheme: "https", Host: "example.test", Path: "/api"}}}, nil,
+		},
+		{
+			"empty-urls", &urls{},
+			&urls{URLs: []url.URL{{Scheme: "https", Host: "example.test", Path: "/api"}}},
+			map[string]string{"URLS": ""},
+		},
+		{"absent-custom", &records{}, &records{Values: []scalarSliceRecord{{"indexed"}}}, nil},
+		{"empty-custom", &records{}, &records{Values: []scalarSliceRecord{{"indexed"}}}, map[string]string{"VALUES": ""}},
+		{"empty-default", &emptyDefault{}, &emptyDefault{Values: []scalarSliceRecord{{"indexed"}}}, nil},
+		{
+			"expanded-empty", &expanded{},
+			&expanded{Values: []scalarSliceRecord{{"indexed"}}},
+			map[string]string{"VALUES": "${MISSING}"},
+		},
+		{"absent-text", &text{}, &text{Values: []scalarSliceText{{"indexed", 0}}}, nil},
+		{"empty-text", &text{}, &text{Values: []scalarSliceText{{"indexed", 0}}}, map[string]string{"VALUES": ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			environment := map[string]string{
+				"ITEM_0_SCHEME": "https", "ITEM_0_HOST": "example.test",
+				"ITEM_0_PATH": "/api", "ITEM_0_VALUE": "indexed",
+			}
+			for key, value := range tt.scalar {
+				environment[key] = value
+			}
+			calls := 0
+			err := ParseWithOptions(tt.config, Options{
+				Environment: environment, UseFieldNameByDefault: true,
+				FuncMap: map[reflect.Type]ParserFunc{
+					reflect.TypeOf(scalarSliceRecord{}): func(value string) (interface{}, error) {
+						calls++
+						return scalarSliceRecord{Value: value}, nil
+					},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(tt.config, tt.want) {
+				t.Errorf("got %#v, want %#v", tt.config, tt.want)
+			}
+			if calls != 0 {
+				t.Errorf("custom parser called %d times, want zero", calls)
+			}
+		})
+	}
+}
