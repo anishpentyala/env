@@ -82,9 +82,9 @@ func TestScalarBoundStructSlices(t *testing.T) {
 			false,
 		},
 		{
-			"retained-nonzero-default",
+			"skipped-nonzero-default",
 			&defaultRecords{Values: []scalarSliceRecord{{"initial"}}},
-			&defaultRecords{Values: []scalarSliceRecord{{"initial"}}},
+			&defaultRecords{Values: []scalarSliceRecord{{"wrong"}, {"also-wrong"}}},
 			true,
 			true,
 			true,
